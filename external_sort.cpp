@@ -1,8 +1,10 @@
 #include <bits/stdc++.h>
+#include <sys/resource.h>
 
 #include "MinHeap.h"
 
 #define TMPFILE_PREFIX "/tmp/exsorttmp_"
+#define TMPOUTPUT_PREFIX "/tmp/exsorttmpoutput_"
 
 static inline size_t getFileSize (const std::string& filename)
 {
@@ -89,7 +91,7 @@ splitChunks (const std::string& input, const size_t memAvail, const size_t numTh
 
 /* Sorted chunks into the final output
  * Used MinHeap will be a little bit faster than std::priority_queue */
-void mergeChunks (const std::list< std::string > tmpFiles, const std::string& output)
+void mergeSomeChunks (const std::list< std::string > tmpFiles, const std::string& output)
 {
     auto vTmpFiles = std::vector< std::ifstream > (tmpFiles.size ());
     auto outFile   = std::ofstream (output); /* Output result */
@@ -138,6 +140,42 @@ void mergeChunks (const std::list< std::string > tmpFiles, const std::string& ou
     }
 }
 
+void mergeChunks (const std::list< std::string > tmpFiles,
+                  const std::string&             output,
+                  const size_t                   fileLimit)
+{
+    if (tmpFiles.size () > (fileLimit)) {
+        auto remainFiles  = tmpFiles.size ();
+        auto tmpOutputs   = std::list< std::string > ();
+        auto tmpOutputIdx = 0;
+        auto lastPos      = tmpFiles.begin ();
+
+        while (remainFiles > 0) {
+            auto const tmpOutputName = TMPOUTPUT_PREFIX + std::to_string (tmpOutputIdx++);
+            auto       subListSize   = remainFiles;
+            if (remainFiles > fileLimit) {
+                subListSize = fileLimit;
+            }
+
+            /* Get the sub list to be merged */
+            auto nextPos = std::next (lastPos, subListSize);
+            auto subList = std::list< std::string > (lastPos, nextPos);
+
+            mergeSomeChunks (subList, tmpOutputName);
+
+            lastPos = nextPos;
+
+            tmpOutputs.push_back (tmpOutputName);
+            remainFiles -= subListSize;
+        }
+
+        mergeSomeChunks (tmpOutputs, output);
+
+    } else {
+        mergeSomeChunks (tmpFiles, output);
+    }
+}
+
 // For sorting data stored on disk
 void externalSort (const std::string& input,
                    const std::string& output,
@@ -149,13 +187,20 @@ void externalSort (const std::string& input,
         return;
     }
 
-    std::cout << "Sorting with " << numThreads << "thread(s)\n";
+    /* Get limit of open files */
+    struct rlimit lim;
+    getrlimit (RLIMIT_NOFILE, &lim);
+
+    std::cout << "Sorting with:\n";
+    std::cout << "\tThread(s): " << numThreads << std::endl;
+    std::cout << "\tLimit files: " << lim.rlim_cur << std::endl;
 
     /* Split the input into sorted chunks files */
     auto tmpFiles = splitChunks (input, memAvail, numThreads);
 
-    /* Merge the sorted chunks to output */
-    mergeChunks (tmpFiles, output);
+    /* Merge the sorted chunks to output
+     * rlim_cur-1, where 1 is reserved for output file */
+    mergeChunks (tmpFiles, output, lim.rlim_cur - 1);
 }
 
 int main (int argc, char** argv)
