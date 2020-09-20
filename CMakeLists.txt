@@ -22,3 +22,7 @@ add_executable(external_sort external_sort.cpp MinHeap.cpp MinHeap.h)
 set(EXECUTABLE_OUTPUT_PATH "${PROJECT_BINARY_DIR}/bin")
 add_executable(generate_text_file test/generate_text_file.cpp)
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+target_link_libraries(external_sort PRIVATE Threads::Threads)
+
