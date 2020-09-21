@@ -1,28 +1,36 @@
 #include <bits/stdc++.h>
 #include <sys/resource.h>
 
+#include "ExternalSort.h"
+
 #include "MinHeap.h"
 
 #define TMPFILE_PREFIX "/tmp/exsorttmp_"
 #define TMPOUTPUT_PREFIX "/tmp/exsorttmpoutput_"
 
-static inline size_t getFileSize (const std::string& filename)
+ExternalSort::ExternalSort (const std::string& inputFilename,
+                            const std::string& outputFilename,
+                            const size_t       memoryAvailable)
+    : mInputFilename (inputFilename),
+      mOutputFilename (outputFilename),
+      mMemoryAvailble (memoryAvailable),
+      mNumThreads (std::thread::hardware_concurrency ())
 {
-    std::ifstream in (filename, std::ifstream::ate);
-    return in.tellg ();
+}
+
+ExternalSort::~ExternalSort ()
+{
 }
 
 /* Split the input file into small chunks that fit to Maximum available memory */
-std::list< std::string >
-splitChunks (const std::string& input, const size_t memAvail, const size_t numThreads)
+void ExternalSort::splitChunks ()
 {
-    auto       tmpFiles       = std::list< std::string > ();
-    auto       inFile         = std::ifstream (input);
-    auto const threadMemAvail = memAvail / numThreads;
+    auto       inFile         = std::ifstream (this->mInputFilename);
+    auto const threadMemAvail = this->mMemoryAvailble / this->mNumThreads;
 
     /* Variables use for multi-threading */
-    std::mutex          inputFileMutex;
-    std::mutex          tmpFilesMutex;
+    std::mutex inputFileMutex;
+    std::mutex tmpFilesMutex;
     /* Use atomic to prevent the colission */
     std::atomic< long > fileno (0);
 
@@ -67,7 +75,7 @@ splitChunks (const std::string& input, const size_t memAvail, const size_t numTh
             /* Push the temp file to tmpFiles list */
             {
                 std::lock_guard< std::mutex > lock (tmpFilesMutex);
-                tmpFiles.push_back (std::string (tmpFile));
+                this->mTmpFiles.push_back (std::string (tmpFile));
             }
 
             /* Push the word haven't inserted yet */
@@ -79,7 +87,7 @@ splitChunks (const std::string& input, const size_t memAvail, const size_t numTh
     };
 
     /* Create the threads to split the input and sort to temp files */
-    std::vector< std::thread > threads (numThreads);
+    std::vector< std::thread > threads (this->mNumThreads);
     for (auto& thread : threads) {
         thread = std::thread (threadFunc);
     }
@@ -87,17 +95,16 @@ splitChunks (const std::string& input, const size_t memAvail, const size_t numTh
     for (auto& thread : threads) {
         thread.join ();
     }
-
-    return tmpFiles;
 }
 
-/* Sorted chunks into the final output
+/* Merging some sorted chunks into the output file
  * Using the MinHeap with replaceMin() will be a little bit faster than std::priority_queue
  */
-void mergeSomeChunks (const std::list< std::string > tmpFiles, const std::string& output)
+void ExternalSort::mergeSomeChunks (const std::list< std::string > tmpFiles,
+                                    const std::string&             outputFilename)
 {
     auto vTmpFiles = std::vector< std::ifstream > (tmpFiles.size ());
-    auto outFile   = std::ofstream (output); /* Output result */
+    auto outFile   = std::ofstream (outputFilename); /* Output result */
 
     /* Array of min heap node that will use to init the MinHeap */
     auto heapArray = new MinHeapNode[tmpFiles.size ()];
@@ -107,7 +114,8 @@ void mergeSomeChunks (const std::list< std::string > tmpFiles, const std::string
     for (auto const& file : tmpFiles) {
         auto tmpFile = std::ifstream (file);
         if (!tmpFile.is_open ())
-            std::cerr << "Cannot open file: " << file << "error: " << errno << "tmpFiles size: " << tmpFiles.size() << std::endl;
+            std::cerr << "Cannot open file: " << file << "error: " << errno
+                      << "tmpFiles size: " << tmpFiles.size () << std::endl;
         auto word = std::string ();
 
         std::getline (tmpFile, heapArray[i].word);
@@ -145,7 +153,7 @@ void mergeSomeChunks (const std::list< std::string > tmpFiles, const std::string
     }
 
     /* Free heap memory */
-    delete [] heapArray;
+    delete[] heapArray;
 }
 
 #if 0
@@ -220,15 +228,13 @@ void mergeChunks (const std::list< std::string > tmpFiles,
  * then merge a part of temp file to create a bigger temp file
  * before merging to final output file
  */
-void mergeChunks (const std::list< std::string > tmpFiles,
-                  const std::string&             output,
-                  const size_t                   fileLimit)
+void ExternalSort::mergeChunks (const size_t fileLimit)
 {
-    if (tmpFiles.size () > fileLimit) {
-        auto remainFiles  = tmpFiles.size ();
+    if (this->mTmpFiles.size () > fileLimit) {
+        auto remainFiles  = this->mTmpFiles.size ();
         auto tmpOutputs   = std::list< std::string > ();
         auto tmpOutputIdx = 0;
-        auto lastPos      = tmpFiles.begin ();
+        auto lastPos      = this->mTmpFiles.begin ();
 
         while (remainFiles > 0) {
             auto const tmpOutputName = TMPOUTPUT_PREFIX + std::to_string (tmpOutputIdx++);
@@ -241,7 +247,7 @@ void mergeChunks (const std::list< std::string > tmpFiles,
             auto nextPos = std::next (lastPos, subListSize);
             auto subList = std::list< std::string > (lastPos, nextPos);
 
-            mergeSomeChunks (subList, tmpOutputName);
+            this->mergeSomeChunks (subList, tmpOutputName);
 
             lastPos = nextPos;
 
@@ -249,59 +255,41 @@ void mergeChunks (const std::list< std::string > tmpFiles,
             remainFiles -= subListSize;
         }
 
-        mergeSomeChunks (tmpOutputs, output);
+        this->mergeSomeChunks (tmpOutputs, mOutputFilename);
 
     } else {
-        mergeSomeChunks (tmpFiles, output);
+        this->mergeSomeChunks (this->mTmpFiles, mOutputFilename);
     }
+}
+
+static inline size_t getFileSize (const std::string& filename)
+{
+    std::ifstream in (filename, std::ifstream::ate);
+    return in.tellg ();
 }
 
 /* For sorting data stored on disk */
-void externalSort (const std::string& input,
-                   const std::string& output,
-                   const long         memAvail,
-                   const size_t       numThreads)
+void ExternalSort::Sort ()
 {
-    if (numThreads == 0) {
-        std::cerr << "Can't get number of threads\n";
-        return;
+    if (getFileSize (this->mInputFilename) > 0) {
+        if (this->mNumThreads == 0) {
+            std::cerr << "Can't get number of threads\n";
+            return;
+        }
+
+        /* Get limit of open files */
+        struct rlimit lim;
+        getrlimit (RLIMIT_NOFILE, &lim);
+
+        std::cout << "Sorting with:\n";
+        std::cout << "\tThread(s): " << this->mNumThreads << std::endl;
+        std::cout << "\tLimit files: " << lim.rlim_cur << std::endl;
+
+        /* Split the input into sorted chunks files */
+        this->splitChunks ();
+
+        /* Merge the sorted chunks to output
+        * rlim_cur-1, where 4 is reserved for std::in, std::out, std::err, and output file */
+        this->mergeChunks (lim.rlim_cur - 4);
     }
-
-    /* Get limit of open files */
-    struct rlimit lim;
-    getrlimit (RLIMIT_NOFILE, &lim);
-
-    std::cout << "Sorting with:\n";
-    std::cout << "\tThread(s): " << numThreads << std::endl;
-    std::cout << "\tLimit files: " << lim.rlim_cur << std::endl;
-
-    /* Split the input into sorted chunks files */
-    auto tmpFiles = splitChunks (input, memAvail, numThreads);
-
-    /* Merge the sorted chunks to output
-     * rlim_cur-1, where 4 is reserved for std::in, std::out, std::err, and output file */
-    mergeChunks (tmpFiles, output, lim.rlim_cur - 4);
-}
-
-int main (int argc, char** argv)
-{
-    if (argc != 4) {
-        std::cout << "USAGE: " << argv[0] << " <input file> <output file> "
-                  << "<memory limit in bytes>" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    auto input    = std::string (argv[1]);
-    auto output   = std::string (argv[2]);
-    auto memAvail = atol (argv[3]); /* Available memory in byte */
-
-    if (memAvail <= 0) {
-        return EXIT_FAILURE;
-    }
-
-    if (getFileSize (input) > 0) {
-        externalSort (input, output, memAvail, std::thread::hardware_concurrency ());
-    }
-
-    return EXIT_SUCCESS;
 }

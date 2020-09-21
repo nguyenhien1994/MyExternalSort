@@ -14,7 +14,7 @@ endif("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
 # Build executable files
 ########################
 set(EXECUTABLE_OUTPUT_PATH "${PROJECT_BINARY_DIR}/bin")
-add_executable(external_sort external_sort.cpp MinHeap.cpp MinHeap.h)
+add_executable(external_sort main.cpp ExternalSort.cpp ExternalSort.h MinHeap.cpp MinHeap.h)
 
 ########################
 # Build test program
